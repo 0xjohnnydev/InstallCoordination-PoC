@@ -81,7 +81,7 @@ IXSPromisedInMemoryDictionary *child =
     [IXSPromisedInMemoryDictionary new];
 child.seed = dictionarySeed;
 child.complete = YES;
-child.relativePath = @"Data.data";
+child.relativePath = @"CodexDictionary-<compact-uuid>.plist";
 ```
 
 The archive must use the daemon's exact class names and keyed fields.
@@ -112,23 +112,50 @@ copy(payload/Coordinators,  state/Coordinators);
 2. Build the exact promise seeds and archives for the target build.
 3. Prepare the final localization leaf as a symlink to a safe scratch file.
 4. Call `stage_installcoord_payload(payloadRoot, &error)`.
-5. Let `installcoordinationd` restore the staged graph.
+5. Cause `installcoordinationd` to reload its saved state.
+6. Run a verification and restoration pass after the daemon materializes the
+   placeholder.
 
 The code does not stage anything until the caller invokes the exported
 function. It expects `payloadRoot` to contain `PromiseStaging`, `DataPromises`,
-and `Coordinators`.
+and `Coordinators`. The published files are minimal mechanism excerpts. They
+do not include the full target-specific seed builder, app UI, daemon-reload
+harness, or verification journal used by the preserved runtime test.
+
+The lab run stopped `installcoordinationd` and let launchd restart it. A normal
+app cannot directly perform that host-controlled step. A natural daemon restart
+can also load the graph, but its timing is not deterministic.
+
+`poc.m` now removes files that it created when staging fails. This cleanup is
+best effort. A concurrent daemon reload can consume or move state before the
+app removes it, so use only a disposable test graph and a journaled scratch
+target.
 
 ## Result and patch status
 
 The safe runtime test produced an exact attacker-selected binary plist at its
 scratch symlink target on `iPhone12,1`, build `24A5380h`. It verified and then
-restored the target.
+restored the target. The preserved replay logged a 156-byte changed plist,
+`semantic_match=true`, `proof=true`, verified restoration, and complete staged
+artifact cleanup. The evidence file is
+`iphone11-installcoord-schema7-replay2-20260710-041649.log`.
+
+The class-13 entry and all three traversal subextensions were also active in
+that run. Separate entry tests created, read back, and removed a direct canary
+in the InstallCoordination state directory.
 
 This result proves a chosen-content write with the daemon's filesystem
 authority. It does not prove UID 0 code execution, unsigned-code execution,
 AMFI bypass, or arbitrary filesystem read/write.
 
+These tests establish only the named iOS 27.0 beta build. The earliest affected
+version is unknown.
+
 Build `24A5408d` patches both known entry defects. Class-13 no longer grants
 the proven nonzero-access request, and `partDomain` rejects traversal-shaped
 values. The persisted restore and final-symlink logic remain, but the known
 normal-app route can no longer reach their files.
+
+The new extension core retains a proxied-client branch. It does not restore
+the proven direct normal-app chain because the earlier nonzero-access policy
+gate and the `partDomain` parser reject that request.

@@ -12,6 +12,7 @@
 + (BOOL)supportsSecureCoding { return YES; }
 - (instancetype)initWithCoder:(NSCoder *)coder
 {
+    // Encoder-only PoC class. Runtime decoding is performed by Apple's class.
     (void)coder;
     return [super init];
 }

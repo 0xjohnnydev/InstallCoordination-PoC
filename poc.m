@@ -12,47 +12,94 @@
 #import <xpc/xpc.h>
 
 typedef void *container_query_t;
+
+typedef struct {
+    void *handle;
+    container_query_t (*create)(void);
+    void (*setClass)(container_query_t, uint64_t);
+    void (*setGroup)(container_query_t, xpc_object_t);
+    void (*setFlags)(container_query_t, uint64_t);
+    void (*setPart)(container_query_t, uint64_t);
+    void (*setDomain)(container_query_t, const char *);
+    void *(*result)(container_query_t);
+    bool (*activate)(void *, bool);
+    void (*queryFree)(container_query_t);
+} InstallCoordAPI;
+
 static NSMutableArray<NSValue *> *activeQueries;
+
+static InstallCoordAPI *SharedAPI(void)
+{
+    static InstallCoordAPI api;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        api.handle = dlopen(
+            "/usr/lib/system/libsystem_containermanager.dylib",
+            RTLD_NOW | RTLD_LOCAL);
+        if (api.handle == NULL) {
+            return;
+        }
+#define LOAD(field, symbol) \
+        api.field = (__typeof(api.field))dlsym(api.handle, symbol)
+        LOAD(create, "container_query_create");
+        LOAD(setClass, "container_query_set_class");
+        LOAD(setGroup, "container_query_set_group_identifiers");
+        LOAD(setFlags, "container_query_operation_set_flags");
+        LOAD(setPart, "container_query_operation_set_part");
+        LOAD(setDomain, "container_query_operation_set_part_domain");
+        LOAD(result, "container_query_get_single_result");
+        LOAD(activate, "container_object_sandbox_extension_activate");
+        LOAD(queryFree, "container_query_free");
+#undef LOAD
+    });
+    return &api;
+}
+
+static void ReleaseActiveQueries(void)
+{
+    InstallCoordAPI *api = SharedAPI();
+    if (api->queryFree == NULL) {
+        return;
+    }
+    @synchronized (activeQueries) {
+        for (NSValue *value in activeQueries) {
+            api->queryFree(value.pointerValue);
+        }
+        [activeQueries removeAllObjects];
+    }
+}
 
 static BOOL ActivateInstallCoordDomain(NSString *domain)
 {
-    void *lib = dlopen(
-        "/usr/lib/system/libsystem_containermanager.dylib",
-        RTLD_NOW | RTLD_LOCAL);
-    container_query_t (*create)(void) =
-        dlsym(lib, "container_query_create");
-    void (*setClass)(container_query_t, uint64_t) =
-        dlsym(lib, "container_query_set_class");
-    void (*setGroup)(container_query_t, xpc_object_t) =
-        dlsym(lib, "container_query_set_group_identifiers");
-    void (*setFlags)(container_query_t, uint64_t) =
-        dlsym(lib, "container_query_operation_set_flags");
-    void (*setPart)(container_query_t, uint64_t) =
-        dlsym(lib, "container_query_operation_set_part");
-    void (*setDomain)(container_query_t, const char *) =
-        dlsym(lib, "container_query_operation_set_part_domain");
-    void *(*result)(container_query_t) =
-        dlsym(lib, "container_query_get_single_result");
-    bool (*activate)(void *, bool) = dlsym(
-        lib, "container_object_sandbox_extension_activate");
-
-    if (create == NULL || setClass == NULL || setGroup == NULL ||
-        setFlags == NULL || setPart == NULL || setDomain == NULL ||
-        result == NULL || activate == NULL) {
+    InstallCoordAPI *api = SharedAPI();
+    if (api->handle == NULL || api->create == NULL ||
+        api->setClass == NULL || api->setGroup == NULL ||
+        api->setFlags == NULL || api->setPart == NULL ||
+        api->setDomain == NULL || api->result == NULL ||
+        api->activate == NULL || api->queryFree == NULL) {
         return NO;
     }
 
-    container_query_t query = create();
-    setClass(query, 13);
+    container_query_t query = api->create();
+    if (query == NULL) {
+        return NO;
+    }
+    api->setClass(query, 13);
     xpc_object_t group = xpc_string_create(
         "systemgroup.com.apple.installcoordinationd");
-    setGroup(query, group);
-    setFlags(query, (UINT64_C(1) << 39) | (UINT64_C(1) << 32));
-    setPart(query, 3);                          // Library/Caches
-    setDomain(query, domain.fileSystemRepresentation);
+    api->setGroup(query, group);
+#if !OS_OBJECT_USE_OBJC
+    xpc_release(group);
+#endif
+    api->setFlags(query, (UINT64_C(1) << 39) | (UINT64_C(1) << 32));
+    api->setPart(query, 3);                     // Library/Caches
+    api->setDomain(query, domain.fileSystemRepresentation);
 
-    void *object = result(query);
-    if (object == NULL || !activate(object, false)) {
+    // The result is borrowed from the query. Keep the query alive until all
+    // staged copies finish, then free it to revoke the extension.
+    void *object = api->result(query);
+    if (object == NULL || !api->activate(object, false)) {
+        api->queryFree(query);
         return NO;
     }
     if (activeQueries == nil) {
@@ -63,6 +110,7 @@ static BOOL ActivateInstallCoordDomain(NSString *domain)
 }
 
 static BOOL CopyContents(NSString *source, NSString *destination,
+                         NSMutableArray<NSString *> *created,
                          NSError **error)
 {
     NSFileManager *fm = NSFileManager.defaultManager;
@@ -74,16 +122,33 @@ static BOOL CopyContents(NSString *source, NSString *destination,
     for (NSString *name in names) {
         NSString *from = [source stringByAppendingPathComponent:name];
         NSString *to = [destination stringByAppendingPathComponent:name];
-        if ([fm fileExistsAtPath:to] || ![fm copyItemAtPath:from
-                                       toPath:to error:error]) {
+        if ([fm fileExistsAtPath:to]) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain
+                    code:NSFileWriteFileExistsError
+                    userInfo:@{NSFilePathErrorKey: to}];
+            }
             return NO;
         }
+        if (![fm copyItemAtPath:from toPath:to error:error]) {
+            return NO;
+        }
+        [created addObject:to];
     }
     return YES;
 }
 
+static void RemoveCreatedItems(NSArray<NSString *> *paths)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    for (NSString *path in paths.reverseObjectEnumerator) {
+        [fm removeItemAtPath:path error:nil];
+    }
+}
+
 BOOL stage_installcoord_payload(NSString *payloadRoot, NSError **error)
 {
+    ReleaseActiveQueries();
     NSArray<NSString *> *parts = @[
         @"PromiseStaging", @"DataPromises", @"Coordinators"
     ];
@@ -91,6 +156,7 @@ BOOL stage_installcoord_payload(NSString *payloadRoot, NSError **error)
         NSString *domain = [@"../InstallCoordination"
             stringByAppendingPathComponent:part];
         if (!ActivateInstallCoordDomain(domain)) {
+            ReleaseActiveQueries();
             return NO;                          // patched on 24A5408d
         }
     }
@@ -100,13 +166,18 @@ BOOL stage_installcoord_payload(NSString *payloadRoot, NSError **error)
          "systemgroup.com.apple.installcoordinationd/Library/"
          "InstallCoordination";
 
+    NSMutableArray<NSString *> *created = [NSMutableArray array];
     // Commit order matters. The coordinator is the final commit record.
     for (NSString *part in parts) {
         if (!CopyContents(
                 [payloadRoot stringByAppendingPathComponent:part],
-                [stateRoot stringByAppendingPathComponent:part], error)) {
+                [stateRoot stringByAppendingPathComponent:part], created,
+                error)) {
+            RemoveCreatedItems(created);
+            ReleaseActiveQueries();
             return NO;
         }
     }
+    ReleaseActiveQueries();
     return YES;
 }
