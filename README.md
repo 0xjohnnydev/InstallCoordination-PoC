@@ -6,6 +6,33 @@ placeholder localization materialization.
 
 The chain has four separate defects.
 
+## Paths exposed by the entry bugs
+
+The direct class-13 request starts at this system-group part:
+
+```text
+/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/Library/Caches/
+```
+
+The unchecked `partDomain` value redirected the extension to these persisted
+state directories:
+
+```text
+/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/Library/InstallCoordination/PromiseStaging/
+/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/Library/InstallCoordination/DataPromises/
+/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/Library/InstallCoordination/Coordinators/
+```
+
+On an affected build, the app can read and write those directories while the
+extension is active. The extension does not grant the whole system-group root
+or arbitrary `/private/var` access.
+
+The final-symlink bug is a second authority step. It redirects one daemon
+binary-plist write to a selected path that `installcoordinationd` is permitted
+to open. The proved target was a random scratch file inside the
+InstallCoordination system group. No test proved a write to a root-only path or
+to the MobileGestalt cache plist through this chain.
+
 ## 1. Class-13 authorization
 
 An ordinary app could request read/write access to the InstallCoordination
