@@ -78,6 +78,10 @@ sandbox token for the first state directory. This remained blocked when the
 test used the `com.apple.mobile.MobileHouseArrest` CodeDirectory identifier.
 The iOS 26.6.1 status is not verified.
 
+This result applies only to the InstallCoordination entry. The separate
+MobileHouseArrest container escape is confirmed vulnerable on the same
+`23F84` device.
+
 ## Use
 
 1. Add [`poc.m`](poc.m) and [`promise_graph.m`](promise_graph.m) to an Objective-C iOS target.
