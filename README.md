@@ -71,8 +71,12 @@ If that final leaf is a symlink, the daemon follows it.
 
 The known normal-app entry is patched in iOS 27 beta 5 (`24A5408d`). The
 class-13 request and `partDomain` traversal are blocked. The persisted-graph
-and final-symlink bugs remain, but the known app entry cannot reach them. The
-iOS 26.6.1 status is not verified.
+and final-symlink bugs remain, but the known app entry cannot reach them.
+
+Runtime testing on an iPhone 11 running iOS 26.5.2 (`23F84`) also returned no
+sandbox token for the first state directory. This remained blocked when the
+test used the `com.apple.mobile.MobileHouseArrest` CodeDirectory identifier.
+The iOS 26.6.1 status is not verified.
 
 ## Use
 
@@ -80,3 +84,7 @@ iOS 26.6.1 status is not verified.
 2. Prepare `PromiseStaging`, `DataPromises`, and `Coordinators` below one payload directory.
 3. Build with the `iphoneos` SDK for `arm64e`.
 4. Call `stage_installcoord_payload(payloadRoot, &error)`.
+
+Call `run_installcoord_entry_poc()` for a bounded entry test. It requires a
+real sandbox token, writes and reads one unique marker in each state directory,
+and removes each marker before it releases the extensions.
