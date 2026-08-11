@@ -202,7 +202,7 @@ BOOL stage_installcoord_payload(NSString *payloadRoot, NSError **error)
         NSString *destination = ActivateInstallCoordDomain(domain);
         if (destination == nil) {
             ReleaseActiveQueries();
-            return NO;                          // patched on 24A5408d
+            return NO;                          // entry unavailable or patched
         }
         destinations[part] = destination;
     }

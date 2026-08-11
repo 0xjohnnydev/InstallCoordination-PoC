@@ -67,20 +67,10 @@ The coordinator commits the graph. The final write target is:
 
 If that final leaf is a symlink, the daemon follows it.
 
-## Patch status
+## Versions
 
-The known normal-app entry is patched in iOS 27 beta 5 (`24A5408d`). The
-class-13 request and `partDomain` traversal are blocked. The persisted-graph
-and final-symlink bugs remain, but the known app entry cannot reach them.
-
-Runtime testing on an iPhone 11 running iOS 26.5.2 (`23F84`) also returned no
-sandbox token for the first state directory. This remained blocked when the
-test used the `com.apple.mobile.MobileHouseArrest` CodeDirectory identifier.
-The iOS 26.6.1 status is not verified.
-
-This result applies only to the InstallCoordination entry. The separate
-MobileHouseArrest container escape is confirmed vulnerable on the same
-`23F84` device.
+Works on iOS 27 beta 1 through beta 4 and iOS 26. It should also apply to
+iOS 18, although some releases may need implementation adjustments.
 
 ## Use
 
